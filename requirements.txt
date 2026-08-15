@@ -5,3 +5,4 @@ chromadb
 sentence-transformers
 langchain-groq
 torch
+python-telegram-bot[job-queue]
