@@ -1,0 +1,6 @@
+python-telegram-bot
+sentence-transformers
+chromadb
+pypdf
+python-dotenv
+google-genai
