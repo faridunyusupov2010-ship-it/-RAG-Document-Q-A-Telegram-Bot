@@ -24,6 +24,7 @@ from utils.pdf_reader import extract_text_from_pdf
 from utils.session_db import (
     init_db,
     save_session,
+    set_awaiting_paste,
     get_session,
     delete_session,
     save_message,
@@ -83,28 +84,42 @@ def _get_session(chat_id: int) -> dict:
         saved = get_session(chat_id)
 
         if saved:
-            try:
-                collection = get_collection(saved["collection_name"])
+            if saved["collection_name"]:
+                try:
+                    collection = get_collection(saved["collection_name"])
 
-                user_sessions[chat_id] = {
-                    "collection": collection,
-                    "chunk_count": saved["chunk_count"],
-                    "history": get_history(chat_id),
-                    "awaiting_paste": False,
-                }
+                    user_sessions[chat_id] = {
+                        "collection": collection,
+                        "chunk_count": saved["chunk_count"],
+                        "history": get_history(chat_id),
+                        "awaiting_paste": saved["awaiting_paste"],
+                    }
 
-            except Exception as e:
-                logger.error(
-                    "Failed to restore collection for chat %s: %s",
-                    chat_id,
-                    e,
-                )
+                except Exception as e:
+                    logger.error(
+                        "Failed to restore collection for chat %s: %s",
+                        chat_id,
+                        e,
+                    )
 
+                    # NOTE: preserve awaiting_paste even if the collection
+                    # itself failed to restore — a failed/missing document
+                    # is unrelated to whether the user is mid-/paste.
+                    user_sessions[chat_id] = {
+                        "collection": None,
+                        "chunk_count": 0,
+                        "history": get_history(chat_id),
+                        "awaiting_paste": saved["awaiting_paste"],
+                    }
+            else:
+                # No document saved yet (e.g. user ran /paste but hasn't
+                # sent the text yet) — nothing to restore from Chroma,
+                # but awaiting_paste still needs to come from the DB.
                 user_sessions[chat_id] = {
                     "collection": None,
                     "chunk_count": 0,
                     "history": get_history(chat_id),
-                    "awaiting_paste": False,
+                    "awaiting_paste": saved["awaiting_paste"],
                 }
 
         else:
@@ -197,6 +212,11 @@ async def paste_command(
     session = _get_session(chat_id)
 
     session["awaiting_paste"] = True
+    set_awaiting_paste(chat_id, True)  # persist — /paste and the pasted
+    # text arrive as two separate messages/updates, possibly handled by
+    # two different process instances if the bot restarts in between
+    # (e.g. a redeploy). Without this, the in-memory flag alone is lost
+    # and the bot "forgets" it asked for pasted text.
 
     await update.message.reply_text(
         "📋 Send me the text now — "
@@ -285,6 +305,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         session["awaiting_paste"] = False
 
         if len(text) > MAX_PASTE_LENGTH:
+            set_awaiting_paste(chat_id, False)  # clear in DB too, not just
+            # in-memory — otherwise a restart before the next message
+            # leaves the DB thinking we're still waiting for pasted text.
             await update.message.reply_text(
                 "⚠️ The text is too long. "
                 "The maximum allowed length is 100,000 characters."

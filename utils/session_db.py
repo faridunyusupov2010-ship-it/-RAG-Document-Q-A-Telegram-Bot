@@ -17,7 +17,8 @@ def init_db() -> None:
                 chat_id INTEGER PRIMARY KEY,
                 collection_name TEXT,
                 chunk_count INTEGER DEFAULT 0,
-                last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                awaiting_paste INTEGER DEFAULT 0
             )
             """
         )
@@ -40,6 +41,20 @@ def init_db() -> None:
                 """
             )
 
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+        # Migration: awaiting_paste (added after the original release —
+        # this is why /paste silently "forgot" its state across restarts:
+        # it only lived in the in-memory dict, never in the DB).
+        try:
+            conn.execute(
+                """
+                ALTER TABLE sessions
+                ADD COLUMN awaiting_paste INTEGER DEFAULT 0
+                """
+            )
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise
@@ -74,6 +89,7 @@ def save_session(
     chat_id: int,
     collection_name: str,
     chunk_count: int,
+    awaiting_paste: bool = False,
 ) -> None:
     """Save or update the document collection for a chat."""
 
@@ -84,22 +100,44 @@ def save_session(
             chat_id,
             collection_name,
             chunk_count,
-            last_activity
+            last_activity,
+            awaiting_paste
         )
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
 
         ON CONFLICT(chat_id) DO UPDATE SET
             collection_name = excluded.collection_name,
             chunk_count = excluded.chunk_count,
-            last_activity = CURRENT_TIMESTAMP
+            last_activity = CURRENT_TIMESTAMP,
+            awaiting_paste = excluded.awaiting_paste
         """,
         (
             chat_id,
             collection_name,
             chunk_count,
+            int(awaiting_paste),
         ),
     )
 
+        conn.commit()
+
+
+def set_awaiting_paste(chat_id: int, awaiting_paste: bool) -> None:
+    """Persist just the awaiting_paste flag, without touching the
+    collection/chunk_count — used by /paste, which runs before any
+    document exists yet, so there's nothing else to save."""
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO sessions (chat_id, awaiting_paste, last_activity)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                awaiting_paste = excluded.awaiting_paste,
+                last_activity = CURRENT_TIMESTAMP
+            """,
+            (chat_id, int(awaiting_paste)),
+        )
         conn.commit()
 
 
@@ -115,7 +153,8 @@ def get_session(chat_id: int) -> dict | None:
                 chat_id,
                 collection_name,
                 chunk_count,
-                last_activity
+                last_activity,
+                awaiting_paste
             FROM sessions
             WHERE chat_id = ?
             """,
@@ -125,7 +164,9 @@ def get_session(chat_id: int) -> dict | None:
         if row is None:
             return None
 
-        return dict(row)
+        result = dict(row)
+        result["awaiting_paste"] = bool(result["awaiting_paste"])
+        return result
 
 
 def delete_session(chat_id: int) -> None:
