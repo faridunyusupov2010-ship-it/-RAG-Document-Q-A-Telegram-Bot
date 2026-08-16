@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 # =========================
 
-EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 TOP_K = 4
 
