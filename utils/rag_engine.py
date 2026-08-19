@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # =========================
 
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "llama-3.1-8b-instant"
 TOP_K = 4
 
 
